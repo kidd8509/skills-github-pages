@@ -45,29 +45,30 @@ WeCom user ──► WeCom servers ──► (ngrok / public URL)
 | Requirement | Install |
 |---|---|
 | **Node.js ≥ 18** | `brew install node` |
-| **GitHub CLI ≥ 2.54** | `brew install gh` |
+| **GitHub Copilot CLI** | `npm install -g @github/copilot` (see below) |
 | **ngrok** (for public URL) | `brew install ngrok/ngrok/ngrok` |
 | A **WeCom developer account** with an enterprise (corp) | [work.weixin.qq.com](https://work.weixin.qq.com) |
 
-GitHub Copilot CLI is now built into `gh` (v2.54+) — no separate extension needed.
-
-> ⚠️ **Common mistake**: `brew install copilot-cli` installs the **AWS Copilot CLI**
-> (used for deploying containers to AWS), **not** the GitHub Copilot CLI.
-> The AWS CLI uses subcommands like `app` and `task` — it will not work with this bridge.
-
-Set up GitHub Copilot CLI:
+Install and verify the GitHub Copilot CLI:
 
 ```bash
-brew install gh              # GitHub CLI (if not already installed, or run: brew upgrade gh)
-gh auth login                # authenticate with your GitHub account
-gh copilot -- -v             # should print: GitHub Copilot CLI x.y.z
+# Install (choose one)
+npm install -g @github/copilot                      # recommended – cross-platform
+curl -fsSL https://gh.io/copilot-install | bash     # install script (macOS/Linux)
+
+# Verify installation
+copilot version   # should print: GitHub Copilot CLI x.y.z
+
+# Test non-interactive mode (what the bridge uses)
+copilot -sp "What is 2+2?"
 ```
 
-Verify it works in non-interactive mode (what the bridge uses):
-
-```bash
-gh copilot -- -p "What is 2+2?" --allow-all-tools
-```
+> ⚠️ **Common mistake**: `brew install copilot-cli` (Homebrew **formula**) installs the
+> **AWS Copilot CLI** (used for deploying containers to AWS ECS/Fargate),
+> **not** the GitHub Copilot CLI.
+> You can tell which one you have: run `copilot --version` — if it says
+> `copilot version: v1.x.x` (no "GitHub" prefix) it is the AWS CLI.
+> Install the GitHub Copilot CLI via npm or the install script above.
 
 ---
 
@@ -286,9 +287,10 @@ Adapt `src/ws/client.js` → `parseEvent()` to match your plugin's exact JSON sc
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `unknown command "ask" for "copilot"` | **AWS Copilot CLI** is installed instead of GitHub Copilot | `brew install copilot-cli` installs the AWS CLI. Use `gh` instead (see Prerequisites) |
-| `unknown command "suggest" for "copilot"` | **Old** `gh copilot` extension (pre-v1) installed | Remove old extension: `gh extension remove copilot`; upgrade gh: `brew upgrade gh` |
-| `GitHub Copilot CLI not found` in server logs | `gh copilot -- -v` doesn't print "GitHub Copilot CLI" | Run `brew upgrade gh` then `gh auth login` and restart the bridge |
+| `unknown command "suggest" for "copilot"` | Old `gh copilot` extension (deprecated Oct 2025). `suggest` was removed. | Install the new standalone CLI: `npm install -g @github/copilot`, then use `copilot -p "…"` |
+| `unknown command "ask" for "copilot"` | Same deprecated extension, or AWS Copilot CLI | See above; verify with `copilot version` — must say "GitHub Copilot" |
+| `GitHub Copilot CLI not found` in server logs | `copilot version` doesn't print "GitHub Copilot …" | Install via npm or install script; if `copilot --version` says `copilot version: vX` it is the AWS CLI |
+| `copilot version: vX.Y.Z` (no "GitHub" prefix) | AWS Copilot CLI is installed, not GitHub's | `npm install -g @github/copilot` or `curl -fsSL https://gh.io/copilot-install \| bash` |
 | `403 Signature mismatch` on handshake | Wrong `WECOM_TOKEN` or `WECOM_ENCODING_AES_KEY` | Copy the values exactly from WeCom admin |
 | `Decryption failed` | Wrong `WECOM_ENCODING_AES_KEY` (must be exactly 43 chars) | Re-copy the key; don't add `=` padding |
 | WeCom keeps retrying the callback | Server returned non-200 or took > 5 s | The bridge always returns 200 immediately; check logs for crash |
@@ -299,8 +301,8 @@ Adapt `src/ws/client.js` → `parseEvent()` to match your plugin's exact JSON sc
 
 ```bash
 # GitHub Copilot CLI (correct) – prints "GitHub Copilot CLI x.y.z"
-gh copilot -- -v
+copilot version
 
-# AWS Copilot CLI (wrong for this bridge) – lists app/deploy/svc commands
-copilot --help | head -5
+# AWS Copilot CLI (wrong for this bridge) – prints "copilot version: vX.Y.Z"
+copilot --version
 ```

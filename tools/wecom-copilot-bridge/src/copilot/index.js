@@ -1,30 +1,35 @@
 /**
  * GitHub Copilot CLI integration.
  *
- * Shells out to `gh copilot` (built-in gh command, v1+) or a standalone
- * `copilot` binary to get AI replies in non-interactive mode.
- * The binary is auto-detected at startup.
+ * Shells out to the standalone `copilot` binary (GitHub Copilot CLI) or,
+ * as a fallback, a `gh copilot` wrapper to get AI replies in non-interactive
+ * mode.  The binary is auto-detected at startup.
  *
- * CLI version compatibility
- * ─────────────────────────
- * GitHub Copilot CLI ≥ 1.0 (current) uses a completely different interface
- * from the old gh extension (which had `suggest`/`ask` subcommands):
+ * Installing the GitHub Copilot CLI
+ * ──────────────────────────────────
+ *   npm install -g @github/copilot      ← recommended (cross-platform)
+ *   curl -fsSL https://gh.io/copilot-install | bash
  *
- *   ✅  NEW  (v1+): gh copilot -- -p "<prompt>" --allow-all-tools
- *   ❌  OLD (ext):  gh copilot suggest -t shell "<prompt>"   ← removed
+ * Non-interactive interface (what this bridge uses):
+ *   copilot -s -p "<prompt>"
+ *   │          │   └── your question / instruction
+ *   │          └────── silent: output only Copilot's response text
+ *   └───────────────── the GitHub Copilot CLI standalone binary
  *
  * IMPORTANT – do NOT confuse GitHub Copilot CLI with AWS Copilot CLI:
- *   ✅  GitHub Copilot CLI: installed via `gh` (built-in) or direct download
- *                           → `gh copilot -- -v` prints "GitHub Copilot CLI x.y.z"
- *   ❌  AWS Copilot CLI:    installed via `brew install copilot-cli`
- *                           → has `app`/`task` subcommands, NOT `-p`
+ *   ✅  GitHub Copilot CLI: `npm install -g @github/copilot`
+ *                           → `copilot version` prints "GitHub Copilot …"
+ *   ❌  AWS Copilot CLI:    `brew install copilot-cli` (Homebrew formula)
+ *                           → `copilot --version` prints "copilot version: vX.Y.Z"
+ *                           → has `app`/`svc`/`task` subcommands, NOT `-p`
+ *   ❌  OLD gh extension:   `gh copilot suggest -t shell "…"` – deprecated Oct 2025
  *
  * Detection strategy (in priority order):
- *   1. COPILOT_BIN env var  – explicit path, used as-is (bypasses gh wrapper)
- *   2. `gh copilot`         – check via `gh copilot -- -v`; must print
- *                             "GitHub Copilot CLI" to rule out AWS CLI
- *   3. standalone `copilot` – check via `copilot -v`; must print
- *                             "GitHub Copilot CLI" to rule out AWS CLI
+ *   1. COPILOT_BIN env var  – explicit path, used as-is (bypasses auto-detect)
+ *   2. standalone `copilot` – check via `copilot version`; output must contain
+ *                             "GitHub Copilot" to rule out the AWS CLI
+ *   3. `gh copilot`         – legacy/fallback; check via `gh copilot -- version`
+ *                             or `gh copilot -- -v`; same "GitHub Copilot" guard
  *
  * Environment variables (all optional):
  *   COPILOT_BIN           – explicit path to the copilot binary
@@ -83,10 +88,12 @@ function probe(bin, args) {
  *
  * Detection priority:
  *   1. COPILOT_BIN env var  – explicit override, accepted unconditionally
- *   2. `gh copilot`         – new built-in gh command (v1+); detected via
- *                             `gh copilot -- -v` printing "GitHub Copilot CLI"
- *   3. standalone `copilot` – direct binary; detected via `copilot -v`
- *                             printing "GitHub Copilot CLI" (rules out AWS CLI)
+ *   2. standalone `copilot` – preferred; detected via `copilot version`
+ *                             (the documented subcommand).  Output must contain
+ *                             "GitHub Copilot" to rule out the AWS Copilot CLI
+ *                             (which prints "copilot version: vX.Y.Z").
+ *   3. `gh copilot`         – legacy fallback; detected via
+ *                             `gh copilot -- version` or `gh copilot -- -v`.
  *
  * @returns {{ bin: string, args: string[], mode: string } | null}
  */
@@ -96,21 +103,28 @@ function detectCopilotBin() {
     return { bin: explicit, args: [], mode: 'standalone' };
   }
 
-  // 1. Try `gh copilot` (new built-in, Copilot CLI v1+).
-  //    Use `--` to prevent gh from interpreting copilot's flags.
-  //    The version string must mention "GitHub Copilot CLI" to distinguish
-  //    from the AWS Copilot CLI which also ships a binary named `copilot`.
-  const ghVersionOut = probe('gh', ['copilot', '--', '-v']);
-  if (ghVersionOut && ghVersionOut.includes('GitHub Copilot CLI')) {
-    // Pass ['copilot', '--'] so callers just append copilot flags directly.
-    return { bin: 'gh', args: ['copilot', '--'], mode: 'gh' };
+  // 1. Standalone `copilot` binary (GitHub Copilot CLI direct install).
+  //    Use `copilot version` – the documented subcommand for version info.
+  //    Fall back to `--version` / `-v` for older or alternative builds.
+  //    The output must contain "GitHub Copilot" to distinguish from the
+  //    AWS Copilot CLI (aws/copilot-cli), which also ships a binary called
+  //    `copilot` and prints "copilot version: vX.Y.Z" (no "GitHub" prefix).
+  const standaloneOut =
+    probe('copilot', ['version']) ||
+    probe('copilot', ['--version']) ||
+    probe('copilot', ['-v']);
+  if (standaloneOut && standaloneOut.includes('GitHub Copilot')) {
+    return { bin: 'copilot', args: [], mode: 'standalone' };
   }
 
-  // 2. Try a standalone `copilot` binary (direct install / PATH).
-  //    Same version-string check to exclude the AWS CLI.
-  const standaloneVersionOut = probe('copilot', ['-v']);
-  if (standaloneVersionOut && standaloneVersionOut.includes('GitHub Copilot CLI')) {
-    return { bin: 'copilot', args: [], mode: 'standalone' };
+  // 2. `gh copilot` wrapper – legacy / fallback path.
+  //    Tries the documented `version` subcommand first, then `-v`.
+  //    Same "GitHub Copilot" guard to reject any non-GitHub binary.
+  const ghOut =
+    probe('gh', ['copilot', '--', 'version']) ||
+    probe('gh', ['copilot', '--', '-v']);
+  if (ghOut && ghOut.includes('GitHub Copilot')) {
+    return { bin: 'gh', args: ['copilot', '--'], mode: 'gh' };
   }
 
   return null;
@@ -130,9 +144,11 @@ function getCopilotBin() {
     } else {
       console.warn(
         '[copilot] GitHub Copilot CLI not found.\n' +
-          '  Install: gh auth login && gh copilot -- -v   (requires gh v2.54+)\n' +
-          '  Or download directly from https://docs.github.com/copilot/how-tos/copilot-cli\n' +
-          '  NOTE: `brew install copilot-cli` installs the AWS Copilot CLI, NOT GitHub Copilot.'
+          '  Install: npm install -g @github/copilot\n' +
+          '  Or:      curl -fsSL https://gh.io/copilot-install | bash\n' +
+          '  Verify:  copilot version   (should print "GitHub Copilot …")\n' +
+          '  NOTE: `brew install copilot-cli` (Homebrew formula) installs the AWS Copilot CLI,\n' +
+          '        NOT GitHub Copilot.  Use the npm package or install script instead.'
       );
     }
   }
@@ -182,9 +198,10 @@ async function ask(userMessage, files = []) {
   if (!detected) {
     return (
       '⚠️  GitHub Copilot CLI is not installed or not detected.\n' +
-      'Make sure `gh` is installed and run: gh auth login\n' +
-      'Then verify with: gh copilot -- -v\n' +
-      '(Note: `brew install copilot-cli` installs the AWS Copilot CLI, not GitHub Copilot.)'
+      'Install: npm install -g @github/copilot\n' +
+      'Or:      curl -fsSL https://gh.io/copilot-install | bash\n' +
+      'Verify:  copilot version\n' +
+      '(Note: `brew install copilot-cli` via Homebrew formula installs the AWS Copilot CLI, not GitHub Copilot.)'
     );
   }
 
@@ -195,15 +212,17 @@ async function ask(userMessage, files = []) {
 
   const { bin, args } = detected;
 
-  // New Copilot CLI v1+ interface (no subcommands):
-  //   gh copilot -- -p "<prompt>" --allow-all-tools --output-format text
-  //   copilot    -- -p "<prompt>" --allow-all-tools --output-format text
+  // GitHub Copilot CLI non-interactive interface:
+  //   copilot -s -p "<prompt>"          (standalone)
+  //   gh copilot -- -s -p "<prompt>"    (via gh wrapper, mode='gh')
   //
-  // --allow-all-tools is required for non-interactive mode (no TTY).
-  // --output-format text gives plain text output (no JSONL lines).
-  // The `--` separator (already included in args for 'gh' mode) prevents
-  // the gh wrapper from intercepting copilot-specific flags.
-  const promptFlags = ['-p', prompt, '--allow-all-tools', '--output-format', 'text'];
+  // -s / --silent  Output only Copilot's response text, omitting usage info
+  //                and decorations.  Ideal for piping / bridge automation.
+  // -p / --prompt  Non-interactive prompt; required for headless operation.
+  //
+  // NOTE: the old gh-copilot extension flags (--allow-all-tools,
+  //       --output-format text) are NOT valid for the current standalone CLI.
+  const promptFlags = ['-s', '-p', prompt];
 
   const cmdArgs = [...args, ...promptFlags];
 
