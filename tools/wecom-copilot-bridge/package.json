@@ -1,0 +1,24 @@
+{
+  "name": "wecom-copilot-bridge",
+  "version": "1.0.0",
+  "description": "WeCom ↔ GitHub Copilot CLI bridge service",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "dev": "node --watch src/index.js",
+    "start": "node src/index.js",
+    "lint": "eslint src --ext .js",
+    "test": "node --test tests/*.test.js"
+  },
+  "dependencies": {
+    "axios": "^1.14.0",
+    "express": "^4.18.3",
+    "xml2js": "^0.6.2"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.0"
+  },
+  "license": "MIT"
+}
