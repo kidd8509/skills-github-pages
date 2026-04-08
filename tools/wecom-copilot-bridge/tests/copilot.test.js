@@ -46,7 +46,7 @@ test('buildPrompt appends context files when provided', () => {
   assert.ok(result.includes('/tmp/bar.txt'));
 });
 
-// ─── Detection logic (unit-tested by mocking execFileSync) ───────────────────
+// ─── Detection logic ─────────────────────────────────────────────────────────
 
 test('COPILOT_BIN env var is used unconditionally when set', () => {
   const origBin = process.env.COPILOT_BIN;
@@ -65,18 +65,21 @@ test('COPILOT_BIN env var is used unconditionally when set', () => {
   else process.env.COPILOT_BIN = origBin;
 });
 
-test('not-found case returns null and does not throw', () => {
-  // Point COPILOT_BIN at a non-existent binary to bypass auto-detection,
-  // then clear it to force detection to run. Since gh and copilot may or
-  // may not be on PATH in CI, we only assert the shape of the result.
+test('detection result has correct shape when a binary is found', () => {
   delete require.cache[require.resolve('../src/copilot/index')];
   const { getCopilotBin } = require('../src/copilot/index');
 
-  // Result is either null (not found) or a valid descriptor
+  // Result is either null (not found in this env) or a valid descriptor.
+  // We don't assert null because gh copilot may be present in CI.
   const result = getCopilotBin();
   if (result !== null) {
     assert.ok(typeof result.bin === 'string', 'bin should be a string');
     assert.ok(Array.isArray(result.args), 'args should be an array');
     assert.ok(['gh', 'standalone'].includes(result.mode), 'mode should be gh or standalone');
+    // For gh mode the args must include '--' so copilot flags are not
+    // intercepted by the gh wrapper (e.g. ['copilot', '--'])
+    if (result.mode === 'gh') {
+      assert.ok(result.args.includes('--'), "gh mode args must include '--'");
+    }
   }
 });
