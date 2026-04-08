@@ -1,17 +1,27 @@
 /**
  * GitHub Copilot CLI integration.
  *
- * Shells out to `copilot` (standalone) or `gh copilot` (extension) to get
- * AI-generated replies.  The binary is auto-detected at startup.
+ * Shells out to `gh copilot` (extension, recommended) or a standalone
+ * `copilot` binary (GitHub's standalone CLI, if installed) to get AI replies.
+ * The binary is auto-detected at startup.
  *
- * Non-interactive invocation uses the `--` separator and stdin to pass the
- * prompt so the shell doesn't need to escape anything.
+ * IMPORTANT – do NOT confuse these two similarly-named tools:
+ *   ✅  GitHub Copilot CLI: installed via `gh extension install github/gh-copilot`
+ *                          → invoked as `gh copilot suggest -t shell "<prompt>"`
+ *   ❌  AWS Copilot CLI:    installed via `brew install copilot-cli`
+ *                          → has `app`/`task` subcommands, NOT `ask`
+ *
+ * Detection strategy (in priority order):
+ *   1. COPILOT_BIN env var  – explicit override, used as-is
+ *   2. `gh copilot`         – check via `gh copilot --version`
+ *   3. standalone `copilot` – only accepted if `copilot ask --help` exits 0
+ *                             (the AWS CLI does NOT have an `ask` subcommand)
  *
  * Environment variables (all optional):
- *   COPILOT_BIN          – explicit path to the copilot binary
- *   COPILOT_TIMEOUT_MS   – ms before we kill the CLI process (default 60000)
+ *   COPILOT_BIN           – explicit path to the copilot binary
+ *   COPILOT_TIMEOUT_MS    – ms before we kill the CLI process (default 60000)
  *   COPILOT_SYSTEM_PROMPT – system-level instruction prepended to every prompt
- *   COPILOT_MAX_LENGTH   – max chars to return (excess is truncated, default 2000)
+ *   COPILOT_MAX_LENGTH    – max chars to return (excess is truncated, default 2000)
  */
 
 'use strict';
@@ -36,33 +46,49 @@ const MAX_CLI_OUTPUT_BYTES = 1024 * 1024;
 // ─── Binary detection ────────────────────────────────────────────────────────────
 
 /**
- * Attempt to locate a working copilot binary.
- * Returns an object { bin, args } where `args` is a prefix args array.
- *   e.g. { bin: 'copilot', args: [] }
- *   e.g. { bin: 'gh', args: ['copilot'] }
+ * Attempt to locate a working GitHub Copilot CLI binary.
+ * Returns an object { bin, args, mode } where:
+ *   bin  – executable name
+ *   args – prefix args array (e.g. ['copilot'] for `gh copilot`)
+ *   mode – 'gh' | 'standalone'
  *
- * @returns {{ bin: string, args: string[] } | null}
+ * Detection priority:
+ *   1. COPILOT_BIN env var  – explicit override, accepted unconditionally
+ *   2. `gh copilot`         – GitHub CLI extension (most common install path)
+ *   3. standalone `copilot` – only if `copilot ask --help` exits 0 (rules out AWS CLI)
+ *
+ * @returns {{ bin: string, args: string[], mode: string } | null}
  */
 function detectCopilotBin() {
   const explicit = process.env.COPILOT_BIN;
   if (explicit) {
-    return { bin: explicit, args: [] };
+    return { bin: explicit, args: [], mode: 'standalone' };
   }
 
-  // Try standalone `copilot` binary first
+  // 1. Try `gh copilot` first – this is the official GitHub Copilot CLI path
+  //    installed via: gh extension install github/gh-copilot
   try {
-    execFileSync('copilot', ['--version'], { stdio: 'pipe', timeout: BINARY_DETECTION_TIMEOUT_MS });
-    return { bin: 'copilot', args: [] };
+    execFileSync('gh', ['copilot', '--version'], {
+      stdio: 'pipe',
+      timeout: BINARY_DETECTION_TIMEOUT_MS,
+    });
+    return { bin: 'gh', args: ['copilot'], mode: 'gh' };
   } catch {
-    // not found or failed
+    // not installed
   }
 
-  // Fall back to `gh copilot`
+  // 2. Try standalone `copilot` binary, but ONLY accept it when the `ask`
+  //    subcommand is actually available.  The AWS Copilot CLI (`brew install
+  //    copilot-cli`) also ships a `copilot` binary but it has `app`/`task`
+  //    commands instead of `ask`, so `copilot ask --help` will exit non-zero.
   try {
-    execFileSync('gh', ['copilot', '--version'], { stdio: 'pipe', timeout: BINARY_DETECTION_TIMEOUT_MS });
-    return { bin: 'gh', args: ['copilot'] };
+    execFileSync('copilot', ['ask', '--help'], {
+      stdio: 'pipe',
+      timeout: BINARY_DETECTION_TIMEOUT_MS,
+    });
+    return { bin: 'copilot', args: [], mode: 'standalone' };
   } catch {
-    // not found
+    // not found, or it is the AWS Copilot CLI (no `ask` subcommand)
   }
 
   return null;
@@ -74,13 +100,16 @@ function getCopilotBin() {
   if (!_copilotBin) {
     _copilotBin = detectCopilotBin();
     if (_copilotBin) {
-      console.log(
-        `[copilot] Using binary: ${_copilotBin.bin} ${_copilotBin.args.join(' ')}`
-      );
+      const label =
+        _copilotBin.mode === 'gh'
+          ? 'gh copilot (extension)'
+          : `${_copilotBin.bin} (standalone)`;
+      console.log(`[copilot] Using binary: ${label}`);
     } else {
       console.warn(
-        '[copilot] Neither `copilot` nor `gh copilot` found. ' +
-          'Install one before messages will be handled.'
+        '[copilot] GitHub Copilot CLI not found.\n' +
+          '  Recommended install: gh extension install github/gh-copilot\n' +
+          '  NOTE: `brew install copilot-cli` installs the AWS Copilot CLI, NOT GitHub Copilot.'
       );
     }
   }
@@ -129,8 +158,9 @@ async function ask(userMessage, files = []) {
   const detected = getCopilotBin();
   if (!detected) {
     return (
-      '⚠️  Copilot CLI is not installed. ' +
-      'Please run `brew install copilot-cli` or `gh extension install github/gh-copilot`.'
+      '⚠️  GitHub Copilot CLI is not installed or not detected.\n' +
+      'Install it with: gh extension install github/gh-copilot\n' +
+      '(Note: `brew install copilot-cli` installs the AWS Copilot CLI, which is different.)'
     );
   }
 
@@ -139,25 +169,33 @@ async function ask(userMessage, files = []) {
     files.length > 0 ? files.join('\n') : undefined
   );
 
-  // Build argument list:
-  //   copilot ask "..." [--file path] ...
-  // or
-  //   gh copilot suggest / ask "..."
-  // We use `suggest` for gh-copilot (maps to Q&A mode) and pass the prompt as
-  // a positional arg.  For standalone copilot we use `ask`.
-  const { bin, args } = detected;
-  const subcommand = bin === 'gh' ? 'suggest' : 'ask';
+  const { bin, args, mode } = detected;
 
-  // File context: for standalone copilot, pass via @path inline; for gh copilot
-  // we append a note in the prompt since it doesn't support --file flags yet.
+  // Subcommand and extra flags differ by CLI type:
+  //   gh copilot suggest -t shell "<prompt>"
+  //     `-t shell` avoids the interactive "what kind of command?" prompt.
+  //   copilot ask "<prompt>" [--file path ...]
+  let subcommand;
+  let extraFlags;
+  if (mode === 'gh') {
+    subcommand = 'suggest';
+    // -t shell tells gh-copilot we want a shell command suggestion;
+    // without it the CLI asks interactively and hangs in non-interactive mode.
+    extraFlags = ['-t', 'shell'];
+  } else {
+    subcommand = 'ask';
+    extraFlags = [];
+  }
+
+  // File context: standalone copilot supports --file; gh copilot does not yet.
   const fileArgs = [];
-  if (files.length > 0 && bin !== 'gh') {
+  if (files.length > 0 && mode !== 'gh') {
     for (const f of files) {
       fileArgs.push('--file', f);
     }
   }
 
-  const cmdArgs = [...args, subcommand, prompt, ...fileArgs];
+  const cmdArgs = [...args, subcommand, ...extraFlags, prompt, ...fileArgs];
 
   try {
     const { stdout, stderr } = await execFileAsync(bin, cmdArgs, {

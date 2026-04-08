@@ -45,18 +45,29 @@ WeCom user ──► WeCom servers ──► (ngrok / public URL)
 | Requirement | Install |
 |---|---|
 | **Node.js ≥ 18** | `brew install node` |
-| **GitHub Copilot CLI** | `brew install copilot-cli` **or** `gh extension install github/gh-copilot` |
+| **GitHub CLI** | `brew install gh` |
+| **GitHub Copilot CLI** (extension) | `gh extension install github/gh-copilot` |
 | **ngrok** (for public URL) | `brew install ngrok/ngrok/ngrok` |
 | A **WeCom developer account** with an enterprise (corp) | [work.weixin.qq.com](https://work.weixin.qq.com) |
 
-Verify Copilot CLI works before starting:
+> ⚠️ **Common mistake**: `brew install copilot-cli` installs the **AWS Copilot CLI**
+> (used for deploying containers to AWS), **not** the GitHub Copilot CLI.
+> The AWS CLI uses subcommands like `app` and `task` — it will not work with this bridge.
+> Install the GitHub Copilot extension instead:
+> ```bash
+> brew install gh            # GitHub CLI (if not already installed)
+> gh auth login              # authenticate with your GitHub account
+> gh extension install github/gh-copilot
+> ```
+
+Verify the right CLI is installed:
 
 ```bash
-# Standalone binary
-copilot ask "What is 2+2?"
+# This should print a version like "Copilot version ..."
+gh copilot --version
 
-# OR via gh extension
-gh copilot suggest "What is 2+2?"
+# Quick smoke test – should return a suggested shell command
+gh copilot suggest -t shell "list all files larger than 1 MB"
 ```
 
 ---
@@ -276,9 +287,25 @@ Adapt `src/ws/client.js` → `parseEvent()` to match your plugin's exact JSON sc
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
+| `unknown command "ask" for "copilot"` | **AWS Copilot CLI** is installed instead of GitHub Copilot | `brew install copilot-cli` installs the AWS CLI. Install GitHub's: `gh extension install github/gh-copilot` |
+| `GitHub Copilot CLI not found` in server logs | Neither `gh copilot` nor a GitHub-compatible `copilot ask` binary found | Run `gh extension install github/gh-copilot` then restart the bridge |
 | `403 Signature mismatch` on handshake | Wrong `WECOM_TOKEN` or `WECOM_ENCODING_AES_KEY` | Copy the values exactly from WeCom admin |
 | `Decryption failed` | Wrong `WECOM_ENCODING_AES_KEY` (must be exactly 43 chars) | Re-copy the key; don't add `=` padding |
-| `Copilot CLI is not installed` in reply | Binary not found | Run `which copilot` or `gh copilot --version` |
 | WeCom keeps retrying the callback | Server returned non-200 or took > 5 s | The bridge always returns 200 immediately; check logs for crash |
 | `WECOM_GROUP_ROBOT_WEBHOOK is not configured` | Env var missing | Add it to `.env` |
 | `gettoken error` | Wrong `WECOM_CORP_ID` or `WECOM_APP_SECRET` | Verify in WeCom admin console |
+
+### How to tell which `copilot` CLI you have
+
+```bash
+copilot --help | head -5
+```
+
+- **AWS Copilot CLI** output starts with `AWS Copilot ...` and lists commands like `app`, `deploy`, `svc`.
+- **GitHub Copilot standalone** (rare) lists `ask`, `suggest`, `explain`.
+
+In either case, the recommended path for this bridge is `gh copilot`:
+
+```bash
+gh copilot --version   # should print something like "Copilot version 1.x.x"
+```
